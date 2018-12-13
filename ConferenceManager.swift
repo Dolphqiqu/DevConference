@@ -1,0 +1,79 @@
+import Foundation
+private let kFavoriteSessionsKey = "favoriteSessions"
+private let kConferencesFileName = "conferences.json"
+private let kSessionsURL = "https://raw.githubusercontent.com/raywenderlich/RWDevCon-App/master/RWDevCon/Supporting%20Files/conferences.json"
+@available(iOS 10.0, *)
+final class ConferenceManager {
+  static var allConferences: [Conference] = []
+  static var current: Conference!
+  private static var storedFileURL: URL? {
+    let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+    return url?.appendingPathComponent(kConferencesFileName)
+  }
+  fileprivate static var favoritedSessions: [Session] {
+    let allFavorites = UserDefaults.standard.object(forKey: kFavoriteSessionsKey)
+    let conferencesToFavorites = allFavorites as? [String: [String]] ?? [:]
+    let currentConferenceFavorites = conferencesToFavorites[current.id] ?? []
+    return current.sessions.flatMap { $0 }.filter { currentConferenceFavorites.contains($0.id) }
+  }
+  static func loadStoredData() {
+    if let url = storedFileURL, let data = try? Data(contentsOf: url) {
+      updateForConference(with: data)
+    } else {
+      let url = Bundle.main.url(forResource: "conferences", withExtension: "json")!
+      let data = try! Data(contentsOf: url, options: [])
+      updateForConference(with: data)
+    }
+  }
+  static func downloadLatestConferences(completion: ((Bool) -> Void)? = nil) {
+    let url = URL(string: kSessionsURL)!
+    let task = URLSession.shared.dataTask(with: url) { data, response, error in
+      if let data = data {
+        self.updateForConference(with: data)
+        self.storeConferenceData(data)
+      }
+      completion?(data != nil)
+    }
+    task.resume()
+  }
+  private static func updateForConference(with data: Data) {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .secondsSince1970
+    allConferences = try! decoder.decode([Conference].self, from: data)
+    current = allConferences.first { $0.date.start >= Date() } ?? allConferences.last
+  }
+  private static func storeConferenceData(_ data: Data) {
+    guard let fileContents = String(data: data, encoding: .utf8), let url = storedFileURL else {
+      return
+    }
+    let queue = DispatchQueue(label: "com.razeware.rwdevcon.filestorage")
+    queue.async {
+      do {
+        try fileContents.write(to: url, atomically: true, encoding: .utf8)
+      } catch {
+        print(error)
+      }
+    }
+  }
+}
+@available(iOS 10.0, *)
+extension Session {
+  var isFavorite: Bool {
+    return ConferenceManager.favoritedSessions.contains(self)
+  }
+  func toggleFavorite(favorite: Bool? = nil) {
+    let favorite = favorite ?? !isFavorite
+    let allFavorites = UserDefaults.standard.object(forKey: kFavoriteSessionsKey)
+    var conferencesToFavorites = allFavorites as? [String: [String]] ?? [:]
+    let currentConference = ConferenceManager.current!
+    if favorite {
+      let newFavorites = Array(Set(ConferenceManager.favoritedSessions.map { $0.id } + [id]))
+      conferencesToFavorites[currentConference.id] = newFavorites
+    } else {
+      conferencesToFavorites[currentConference.id] = ConferenceManager.favoritedSessions
+                                                       .filter { $0.id != self.id }
+                                                       .map { $0.id }
+    }
+    UserDefaults.standard.set(conferencesToFavorites, forKey: kFavoriteSessionsKey)
+  }
+}
